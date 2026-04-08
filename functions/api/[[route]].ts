@@ -109,7 +109,7 @@ type OAuthProfile = {
 const SESSION_COOKIE = 'wecites_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
 const OAUTH_COOKIE_MAX_AGE = 60 * 10
-const PASSWORD_ITERATIONS = 120000
+const PASSWORD_ITERATIONS = 15000
 const PASSWORD_MIN_LENGTH = 8
 const AI_EMBEDDING_DIMENSIONS = 768
 const HASH_EMBEDDING_DIMENSIONS = 128
@@ -805,20 +805,11 @@ async function createSession(db: D1Database, userId: string) {
 }
 
 async function hashPassword(password: string, saltHex: string, iterations: number) {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
-    'deriveBits',
-  ])
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: hexToBytes(saltHex),
-      iterations,
-    },
-    key,
-    256,
-  )
-  return bytesToHex(new Uint8Array(bits))
+  let digest = new TextEncoder().encode(`${saltHex}:${password}`)
+  for (let round = 0; round < iterations; round += 1) {
+    digest = new Uint8Array(await crypto.subtle.digest('SHA-256', digest))
+  }
+  return bytesToHex(digest)
 }
 
 async function verifyPassword(
@@ -1561,14 +1552,6 @@ function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes)
     .map((value) => value.toString(16).padStart(2, '0'))
     .join('')
-}
-
-function hexToBytes(value: string) {
-  const bytes = new Uint8Array(value.length / 2)
-  for (let index = 0; index < value.length; index += 2) {
-    bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16)
-  }
-  return bytes
 }
 
 function timingSafeEqual(left: string, right: string) {
