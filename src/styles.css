@@ -225,6 +225,26 @@ h2 {
   margin-top: 1rem;
 }
 
+.page-tabs {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.tab-button {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #dce5ff;
+}
+
+.tab-button.active {
+  background: linear-gradient(135deg, #7f56d9, #4383ff);
+  border-color: transparent;
+  color: #fff;
+}
+
 .section-card {
   margin-top: 1rem;
 }

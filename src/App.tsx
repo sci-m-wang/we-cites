@@ -1,13 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type {
   ApiError,
-  ImportResult,
   InviteRecord,
   PaperRecord,
   RecommendationPayload,
   SessionPayload,
 } from './lib/shared'
 import { emptyFeatures } from './lib/shared'
+
+type DashboardPage = 'profile' | 'papers' | 'invites' | 'recommendations'
 
 type ProfileForm = {
   name: string
@@ -21,12 +22,6 @@ type PaperForm = {
   abstract: string
   introduction: string
   tldr: string
-  authorsText: string
-  year: string
-  venue: string
-  source: 'manual' | 'dblp' | 'semantic-scholar'
-  sourceId: string
-  externalUrl: string
 }
 
 type InviteForm = {
@@ -54,12 +49,6 @@ const emptyPaperForm: PaperForm = {
   abstract: '',
   introduction: '',
   tldr: '',
-  authorsText: '',
-  year: '',
-  venue: '',
-  source: 'manual',
-  sourceId: '',
-  externalUrl: '',
 }
 
 const emptyInviteForm: InviteForm = {
@@ -81,6 +70,13 @@ const emptyRegisterForm: RegisterForm = {
   inviteCode: '',
 }
 
+const dashboardPages: Array<{ id: DashboardPage; label: string }> = [
+  { id: 'profile', label: '研究资料' },
+  { id: 'papers', label: '论文库' },
+  { id: 'invites', label: '邀请码' },
+  { id: 'recommendations', label: '推荐引用' },
+]
+
 function App() {
   const [session, setSession] = useState<SessionPayload>({
     user: null,
@@ -99,13 +95,11 @@ function App() {
   const [loginForm, setLoginForm] = useState<LoginForm>(emptyLoginForm)
   const [registerForm, setRegisterForm] = useState<RegisterForm>(emptyRegisterForm)
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null)
-  const [importSource, setImportSource] = useState<'dblp' | 'semantic-scholar'>('dblp')
-  const [importQuery, setImportQuery] = useState('')
-  const [importResults, setImportResults] = useState<ImportResult[]>([])
   const [recommendationExtra, setRecommendationExtra] = useState('')
   const [recommendations, setRecommendations] = useState<RecommendationPayload | null>(null)
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState<DashboardPage>(() => readDashboardPage())
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -115,10 +109,26 @@ function App() {
       url.searchParams.delete('authError')
       window.history.replaceState({}, '', url.toString())
     }
+
+    const onHashChange = () => setCurrentPage(readDashboardPage())
+    window.addEventListener('hashchange', onHashChange)
     void refreshSession()
+
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+    }
   }, [])
 
   const isAuthenticated = Boolean(session.user)
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return
+    }
+    if (!window.location.hash) {
+      navigateToPage('profile', true)
+    }
+  }, [isAuthenticated])
 
   async function refreshSession() {
     setLoadingLabel('正在加载会话')
@@ -148,6 +158,17 @@ function App() {
     }
   }
 
+  function navigateToPage(page: DashboardPage, replace = false) {
+    setCurrentPage(page)
+    const url = new URL(window.location.href)
+    url.hash = page
+    if (replace) {
+      window.history.replaceState({}, '', url.toString())
+      return
+    }
+    window.history.pushState({}, '', url.toString())
+  }
+
   async function loginWithEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setLoadingLabel('正在登录')
@@ -158,6 +179,7 @@ function App() {
       })
       setLoginForm(emptyLoginForm)
       await refreshSession()
+      navigateToPage('profile', true)
       setNotice('登录成功')
     } catch (error) {
       setLoadingLabel(null)
@@ -175,6 +197,7 @@ function App() {
       })
       setRegisterForm(emptyRegisterForm)
       await refreshSession()
+      navigateToPage('profile', true)
       setNotice('账号已创建并登录')
     } catch (error) {
       setLoadingLabel(null)
@@ -189,6 +212,9 @@ function App() {
       setRecommendations(null)
       setPaperForm(emptyPaperForm)
       setEditingPaperId(null)
+      const url = new URL(window.location.href)
+      url.hash = ''
+      window.history.replaceState({}, '', url.toString())
       await refreshSession()
     } catch (error) {
       setNotice(readError(error))
@@ -227,52 +253,13 @@ function App() {
       })
       setInviteForm(emptyInviteForm)
       setInvites((current) => [result, ...current])
-      setNotice(`邀请码已生成：${result.code}`)
       await copyText(result.code)
+      setNotice(`邀请码已生成并复制：${result.code}`)
     } catch (error) {
       setNotice(readError(error))
     } finally {
       setLoadingLabel(null)
     }
-  }
-
-  async function searchImports(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!importQuery.trim()) {
-      setNotice('请先输入检索关键词')
-      return
-    }
-    setLoadingLabel(`正在从 ${importSource} 导入`)
-    try {
-      const query = new URLSearchParams({ q: importQuery.trim() }).toString()
-      const result = await api<ImportResult[]>(`/api/import/${importSource}?${query}`)
-      setImportResults(result)
-      if (!result.length) {
-        setNotice('没有找到可导入的结果')
-      }
-    } catch (error) {
-      setNotice(readError(error))
-    } finally {
-      setLoadingLabel(null)
-    }
-  }
-
-  function applyImport(result: ImportResult) {
-    setEditingPaperId(null)
-    setPaperForm({
-      title: result.title,
-      bibtex: result.bibtex,
-      abstract: result.abstract,
-      introduction: result.introduction,
-      tldr: result.tldr,
-      authorsText: result.authors.join(', '),
-      year: result.year ? String(result.year) : '',
-      venue: result.venue,
-      source: result.source,
-      sourceId: result.sourceId ?? '',
-      externalUrl: result.externalUrl ?? '',
-    })
-    setNotice('已将导入结果填入表单，请检查后保存')
   }
 
   function editPaper(paper: PaperRecord) {
@@ -283,13 +270,8 @@ function App() {
       abstract: paper.abstract,
       introduction: paper.introduction,
       tldr: paper.tldr,
-      authorsText: paper.authors.join(', '),
-      year: paper.year ? String(paper.year) : '',
-      venue: paper.venue,
-      source: paper.source,
-      sourceId: paper.sourceId ?? '',
-      externalUrl: paper.externalUrl ?? '',
     })
+    navigateToPage('papers')
   }
 
   async function submitPaper(event: FormEvent<HTMLFormElement>) {
@@ -302,15 +284,6 @@ function App() {
         abstract: paperForm.abstract,
         introduction: paperForm.introduction,
         tldr: paperForm.tldr,
-        authors: paperForm.authorsText
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
-        year: paperForm.year ? Number(paperForm.year) : null,
-        venue: paperForm.venue,
-        source: paperForm.source,
-        sourceId: paperForm.sourceId || null,
-        externalUrl: paperForm.externalUrl || null,
       }
       const endpoint = editingPaperId ? `/api/papers/${editingPaperId}` : '/api/papers'
       const method = editingPaperId ? 'PUT' : 'POST'
@@ -380,15 +353,13 @@ function App() {
         <section className="hero card">
           <div>
             <p className="eyebrow">We Cites</p>
-            <h1>为研究者建立私有引用网络</h1>
-            <p className="lead">
-              在小范围邀请网络中维护研究简介、论文条目与候选参考文献。
-            </p>
+            <h1>研究者之间的小型引用网络</h1>
+            <p className="lead">维护研究资料、论文条目和站内候选引用，不把所有流程堆在同一页。</p>
           </div>
           <div className="hero-stats">
             <Metric label="我的论文" value={String(session.stats.ownPaperCount)} />
-            <Metric label="他人论文" value={String(session.stats.networkPaperCount)} />
-            <Metric label="LLM 分析" value={session.features.aiAnalysis ? '已开启' : '降级模式'} />
+            <Metric label="网络论文" value={String(session.stats.networkPaperCount)} />
+            <Metric label="推荐引擎" value={session.features.aiAnalysis ? 'AI + 向量' : '降级模式'} />
           </div>
         </section>
 
@@ -429,7 +400,7 @@ function App() {
             </article>
 
             <article className="card auth-card">
-              <h2>邮箱注册</h2>
+              <h2>创建账号</h2>
               <form className="form-grid compact" onSubmit={registerWithEmail}>
                 <label>
                   显示名称
@@ -478,9 +449,7 @@ function App() {
                 </label>
                 <button type="submit">创建账号</button>
               </form>
-              <p className="muted">
-                初始管理员白名单邮箱可直接注册；其他新用户需要邀请码。
-              </p>
+              <p className="muted">初始管理员白名单邮箱可直接注册，其他新用户需要邀请码。</p>
             </article>
           </section>
         ) : (
@@ -500,416 +469,350 @@ function App() {
               </div>
             </section>
 
-            <section className="grid two-col">
-              <article className="card section-card">
-                <h2>研究简介</h2>
-                <form className="form-grid" onSubmit={saveProfile}>
-                  <label>
-                    显示名称
-                    <input
-                      value={profileForm.name}
-                      onChange={(event) =>
-                        setProfileForm((current) => ({ ...current, name: event.target.value }))
-                      }
-                      placeholder="例如 Ming Wang"
-                    />
-                  </label>
-                  <label>
-                    研究工作
-                    <textarea
-                      rows={6}
-                      value={profileForm.researchSummary}
-                      onChange={(event) =>
-                        setProfileForm((current) => ({
-                          ...current,
-                          researchSummary: event.target.value,
-                        }))
-                      }
-                      placeholder="描述你的研究主题、方法、任务、场景与关键词。"
-                    />
-                  </label>
-                  <label>
-                    个人简介
-                    <textarea
-                      rows={4}
-                      value={profileForm.bio}
-                      onChange={(event) =>
-                        setProfileForm((current) => ({ ...current, bio: event.target.value }))
-                      }
-                      placeholder="介绍你的研究背景、目标和当前问题。"
-                    />
-                  </label>
-                  <button type="submit">保存简介</button>
-                </form>
-              </article>
+            <nav className="page-tabs card">
+              {dashboardPages.map((page) => (
+                <button
+                  key={page.id}
+                  type="button"
+                  className={currentPage === page.id ? 'tab-button active' : 'tab-button'}
+                  onClick={() => navigateToPage(page.id)}
+                >
+                  {page.label}
+                </button>
+              ))}
+            </nav>
 
-              <article className="card section-card">
-                <h2>邀请码管理</h2>
-                <form className="form-grid compact" onSubmit={createInvite}>
-                  <label>
-                    定向邮箱（可选）
-                    <input
-                      value={inviteForm.targetEmail}
-                      onChange={(event) =>
-                        setInviteForm((current) => ({ ...current, targetEmail: event.target.value }))
-                      }
-                      placeholder="someone@example.com"
-                    />
-                  </label>
-                  <label>
-                    备注
-                    <input
-                      value={inviteForm.note}
-                      onChange={(event) =>
-                        setInviteForm((current) => ({ ...current, note: event.target.value }))
-                      }
-                      placeholder="例如 lab student"
-                    />
-                  </label>
-                  <label>
-                    最大使用次数
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={inviteForm.maxUses}
-                      onChange={(event) =>
-                        setInviteForm((current) => ({ ...current, maxUses: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    过期天数
-                    <input
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={inviteForm.expiresInDays}
-                      onChange={(event) =>
-                        setInviteForm((current) => ({
-                          ...current,
-                          expiresInDays: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <button type="submit">生成邀请码</button>
-                </form>
-                <div className="list-stack">
-                  {invites.length ? (
-                    invites.map((invite) => (
-                      <div className="list-card" key={invite.id}>
-                        <div>
-                          <strong>{invite.code}</strong>
-                          <p className="muted">
-                            已用 {invite.usedCount}/{invite.maxUses}
-                            {invite.targetEmail ? ` · ${invite.targetEmail}` : ''}
-                            {invite.note ? ` · ${invite.note}` : ''}
-                          </p>
-                        </div>
-                        <button type="button" className="secondary" onClick={() => void copyText(invite.code)}>
-                          复制
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="muted">你还没有生成邀请码。</p>
-                  )}
-                </div>
-              </article>
-            </section>
-
-            <section className="grid two-col">
-              <article className="card section-card">
-                <h2>论文导入</h2>
-                <form className="inline-form" onSubmit={searchImports}>
-                  <select
-                    value={importSource}
-                    onChange={(event) =>
-                      setImportSource(event.target.value as 'dblp' | 'semantic-scholar')
-                    }
-                  >
-                    <option value="dblp">DBLP</option>
-                    <option value="semantic-scholar">Semantic Scholar</option>
-                  </select>
-                  <input
-                    value={importQuery}
-                    onChange={(event) => setImportQuery(event.target.value)}
-                    placeholder="输入 title / author / topic"
-                  />
-                  <button type="submit">搜索导入</button>
-                </form>
-                <div className="list-stack import-results">
-                  {importResults.map((result, index) => (
-                    <div className="list-card vertical" key={`${result.source}-${result.sourceId ?? index}`}>
-                      <div>
-                        <strong>{result.title}</strong>
-                        <p className="muted">
-                          {result.authors.join(', ') || 'Unknown authors'}
-                          {result.year ? ` · ${result.year}` : ''}
-                          {result.venue ? ` · ${result.venue}` : ''}
-                        </p>
-                        {result.abstract ? <p>{result.abstract}</p> : null}
-                      </div>
-                      <div className="button-row">
-                        <button type="button" className="secondary" onClick={() => applyImport(result)}>
-                          填入表单
-                        </button>
-                        {result.externalUrl ? (
-                          <a className="link-button" href={result.externalUrl} target="_blank" rel="noreferrer">
-                            查看来源
-                          </a>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </article>
-
-              <article className="card section-card">
-                <h2>{editingPaperId ? '编辑论文' : '上传论文信息'}</h2>
-                <form className="form-grid" onSubmit={submitPaper}>
-                  <label>
-                    Title
-                    <input
-                      value={paperForm.title}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, title: event.target.value }))
-                      }
-                      placeholder="Paper title"
-                    />
-                  </label>
-                  <label>
-                    BibTeX
-                    <textarea
-                      rows={8}
-                      value={paperForm.bibtex}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, bibtex: event.target.value }))
-                      }
-                      placeholder="@article{...}"
-                    />
-                  </label>
-                  <label>
-                    Authors
-                    <input
-                      value={paperForm.authorsText}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, authorsText: event.target.value }))
-                      }
-                      placeholder="Alice, Bob, Carol"
-                    />
-                  </label>
-                  <div className="split-grid">
+            {currentPage === 'profile' ? (
+              <section className="grid two-col">
+                <article className="card section-card">
+                  <h2>研究资料</h2>
+                  <form className="form-grid" onSubmit={saveProfile}>
                     <label>
-                      Year
+                      显示名称
                       <input
-                        type="number"
-                        value={paperForm.year}
+                        value={profileForm.name}
                         onChange={(event) =>
-                          setPaperForm((current) => ({ ...current, year: event.target.value }))
+                          setProfileForm((current) => ({ ...current, name: event.target.value }))
                         }
-                        placeholder="2026"
+                        placeholder="例如 Ming Wang"
                       />
                     </label>
                     <label>
-                      Venue
-                      <input
-                        value={paperForm.venue}
+                      研究工作
+                      <textarea
+                        rows={6}
+                        value={profileForm.researchSummary}
                         onChange={(event) =>
-                          setPaperForm((current) => ({ ...current, venue: event.target.value }))
-                        }
-                        placeholder="NeurIPS / ACL / arXiv"
-                      />
-                    </label>
-                  </div>
-                  <label>
-                    Abstract
-                    <textarea
-                      rows={5}
-                      value={paperForm.abstract}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, abstract: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    TLDR
-                    <textarea
-                      rows={3}
-                      value={paperForm.tldr}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, tldr: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    介绍 / 适用场景
-                    <textarea
-                      rows={4}
-                      value={paperForm.introduction}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, introduction: event.target.value }))
-                      }
-                      placeholder="简要说明论文解决的问题、核心方法和适用场景。"
-                    />
-                  </label>
-                  <div className="split-grid">
-                    <label>
-                      来源
-                      <select
-                        value={paperForm.source}
-                        onChange={(event) =>
-                          setPaperForm((current) => ({
+                          setProfileForm((current) => ({
                             ...current,
-                            source: event.target.value as PaperForm['source'],
+                            researchSummary: event.target.value,
                           }))
                         }
-                      >
-                        <option value="manual">manual</option>
-                        <option value="dblp">dblp</option>
-                        <option value="semantic-scholar">semantic-scholar</option>
-                      </select>
+                        placeholder="描述你的研究主题、方法、任务、场景与关键词。"
+                      />
                     </label>
                     <label>
-                      来源 ID
-                      <input
-                        value={paperForm.sourceId}
+                      个人简介
+                      <textarea
+                        rows={4}
+                        value={profileForm.bio}
                         onChange={(event) =>
-                          setPaperForm((current) => ({ ...current, sourceId: event.target.value }))
+                          setProfileForm((current) => ({ ...current, bio: event.target.value }))
+                        }
+                        placeholder="介绍你的研究背景、目标和当前问题。"
+                      />
+                    </label>
+                    <button type="submit">保存资料</button>
+                  </form>
+                </article>
+
+                <article className="card section-card">
+                  <h2>当前状态</h2>
+                  <div className="list-stack">
+                    <div className="list-card vertical">
+                      <strong>站内候选来源</strong>
+                      <p className="muted">当前推荐只会从其他用户已上传的论文条目里选候选引用。</p>
+                    </div>
+                    <div className="list-card vertical">
+                      <strong>推荐方式</strong>
+                      <p className="muted">
+                        {session.features.aiAnalysis
+                          ? '当前使用 AI 抽取研究方面，再结合向量相似度做候选排序。'
+                          : '当前未启用外部 AI，系统会回退到关键词和轻量向量匹配。'}
+                      </p>
+                    </div>
+                    <div className="list-card vertical">
+                      <strong>账号规则</strong>
+                      <p className="muted">你可以生成邀请码给其他成员，形成一个小范围的站内引用网络。</p>
+                    </div>
+                  </div>
+                </article>
+              </section>
+            ) : null}
+
+            {currentPage === 'papers' ? (
+              <section className="grid two-col">
+                <article className="card section-card">
+                  <h2>{editingPaperId ? '编辑论文' : '添加论文'}</h2>
+                  <form className="form-grid" onSubmit={submitPaper}>
+                    <label>
+                      Title
+                      <input
+                        value={paperForm.title}
+                        onChange={(event) =>
+                          setPaperForm((current) => ({ ...current, title: event.target.value }))
+                        }
+                        placeholder="可填写；若留空则尝试从 BibTeX 提取"
+                      />
+                    </label>
+                    <label>
+                      BibTeX
+                      <textarea
+                        rows={10}
+                        value={paperForm.bibtex}
+                        onChange={(event) =>
+                          setPaperForm((current) => ({ ...current, bibtex: event.target.value }))
+                        }
+                        placeholder="@article{...}"
+                      />
+                    </label>
+                    <p className="muted">作者、年份、venue、链接等元数据会从 BibTeX 自动解析，不需要单独填写。</p>
+                    <label>
+                      Abstract
+                      <textarea
+                        rows={5}
+                        value={paperForm.abstract}
+                        onChange={(event) =>
+                          setPaperForm((current) => ({ ...current, abstract: event.target.value }))
                         }
                       />
                     </label>
+                    <label>
+                      TLDR
+                      <textarea
+                        rows={3}
+                        value={paperForm.tldr}
+                        onChange={(event) =>
+                          setPaperForm((current) => ({ ...current, tldr: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      介绍 / 适用场景
+                      <textarea
+                        rows={4}
+                        value={paperForm.introduction}
+                        onChange={(event) =>
+                          setPaperForm((current) => ({ ...current, introduction: event.target.value }))
+                        }
+                        placeholder="简要说明论文解决的问题、核心方法和适用场景。"
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button type="submit">{editingPaperId ? '更新论文' : '保存论文'}</button>
+                      {editingPaperId ? (
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            setEditingPaperId(null)
+                            setPaperForm(emptyPaperForm)
+                          }}
+                        >
+                          取消编辑
+                        </button>
+                      ) : null}
+                    </div>
+                  </form>
+                </article>
+
+                <article className="card section-card">
+                  <h2>我的论文</h2>
+                  <div className="list-stack">
+                    {papers.length ? (
+                      papers.map((paper) => (
+                        <div className="list-card vertical" key={paper.id}>
+                          <div>
+                            <strong>{paper.title}</strong>
+                            <p className="muted">
+                              {paper.authors.join(', ') || '作者将从 BibTeX 解析'}
+                              {paper.year ? ` · ${paper.year}` : ''}
+                              {paper.venue ? ` · ${paper.venue}` : ''}
+                            </p>
+                            {paper.tldr ? <p>{paper.tldr}</p> : null}
+                          </div>
+                          <div className="button-row">
+                            <button type="button" className="secondary" onClick={() => editPaper(paper)}>
+                              编辑
+                            </button>
+                            <button type="button" className="secondary" onClick={() => void copyText(paper.bibtex)}>
+                              复制 BibTeX
+                            </button>
+                            {paper.externalUrl ? (
+                              <a className="link-button" href={paper.externalUrl} target="_blank" rel="noreferrer">
+                                查看链接
+                              </a>
+                            ) : null}
+                            <button type="button" className="danger" onClick={() => void removePaper(paper.id)}>
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="muted">当前先只支持手动录入 BibTeX 与摘要信息。</p>
+                    )}
                   </div>
+                </article>
+              </section>
+            ) : null}
+
+            {currentPage === 'invites' ? (
+              <section className="grid two-col">
+                <article className="card section-card">
+                  <h2>生成邀请码</h2>
+                  <form className="form-grid compact" onSubmit={createInvite}>
+                    <label>
+                      定向邮箱（可选）
+                      <input
+                        value={inviteForm.targetEmail}
+                        onChange={(event) =>
+                          setInviteForm((current) => ({ ...current, targetEmail: event.target.value }))
+                        }
+                        placeholder="someone@example.com"
+                      />
+                    </label>
+                    <label>
+                      备注
+                      <input
+                        value={inviteForm.note}
+                        onChange={(event) =>
+                          setInviteForm((current) => ({ ...current, note: event.target.value }))
+                        }
+                        placeholder="例如 lab student"
+                      />
+                    </label>
+                    <label>
+                      最大使用次数
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={inviteForm.maxUses}
+                        onChange={(event) =>
+                          setInviteForm((current) => ({ ...current, maxUses: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      过期天数
+                      <input
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={inviteForm.expiresInDays}
+                        onChange={(event) =>
+                          setInviteForm((current) => ({ ...current, expiresInDays: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <button type="submit">生成邀请码</button>
+                  </form>
+                </article>
+
+                <article className="card section-card">
+                  <h2>已生成的邀请码</h2>
+                  <div className="list-stack">
+                    {invites.length ? (
+                      invites.map((invite) => (
+                        <div className="list-card" key={invite.id}>
+                          <div>
+                            <strong>{invite.code}</strong>
+                            <p className="muted">
+                              已用 {invite.usedCount}/{invite.maxUses}
+                              {invite.targetEmail ? ` · ${invite.targetEmail}` : ''}
+                              {invite.note ? ` · ${invite.note}` : ''}
+                            </p>
+                          </div>
+                          <button type="button" className="secondary" onClick={() => void copyText(invite.code)}>
+                            复制
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="muted">你还没有生成邀请码。</p>
+                    )}
+                  </div>
+                </article>
+              </section>
+            ) : null}
+
+            {currentPage === 'recommendations' ? (
+              <section className="card section-card">
+                <h2>推荐引用</h2>
+                <form className="form-grid" onSubmit={generateRecommendations}>
                   <label>
-                    外部链接
-                    <input
-                      value={paperForm.externalUrl}
-                      onChange={(event) =>
-                        setPaperForm((current) => ({ ...current, externalUrl: event.target.value }))
-                      }
-                      placeholder="https://..."
+                    补充检索说明（可选）
+                    <textarea
+                      rows={4}
+                      value={recommendationExtra}
+                      onChange={(event) => setRecommendationExtra(event.target.value)}
+                      placeholder="例如当前正在补 related work，优先找方法接近、任务相邻的工作。"
                     />
                   </label>
-                  <div className="button-row">
-                    <button type="submit">{editingPaperId ? '更新论文' : '保存论文'}</button>
-                    {editingPaperId ? (
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => {
-                          setEditingPaperId(null)
-                          setPaperForm(emptyPaperForm)
-                        }}
-                      >
-                        取消编辑
-                      </button>
-                    ) : null}
-                  </div>
+                  <button type="submit">生成候选引用</button>
                 </form>
-              </article>
-            </section>
 
-            <section className="card section-card">
-              <h2>我的论文</h2>
-              <div className="list-stack">
-                {papers.length ? (
-                  papers.map((paper) => (
-                    <div className="list-card vertical" key={paper.id}>
-                      <div>
-                        <strong>{paper.title}</strong>
-                        <p className="muted">
-                          {paper.authors.join(', ') || 'Unknown authors'}
-                          {paper.year ? ` · ${paper.year}` : ''}
-                          {paper.venue ? ` · ${paper.venue}` : ''}
-                        </p>
-                        {paper.tldr ? <p>{paper.tldr}</p> : null}
-                      </div>
-                      <div className="button-row">
-                        <button type="button" className="secondary" onClick={() => editPaper(paper)}>
-                          编辑
-                        </button>
-                        <button type="button" className="secondary" onClick={() => void copyText(paper.bibtex)}>
-                          复制 BibTeX
-                        </button>
-                        <button type="button" className="danger" onClick={() => void removePaper(paper.id)}>
-                          删除
-                        </button>
-                      </div>
+                {recommendations ? (
+                  <div className="recommendation-panel">
+                    <div className="aspect-row">
+                      {recommendations.aspects.map((aspect) => (
+                        <div className="aspect-chip" key={aspect.label}>
+                          <strong>{aspect.label}</strong>
+                          <span>{aspect.keywords.join(', ')}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))
-                ) : (
-                  <p className="muted">还没有上传论文，可以先手动填写或从 DBLP / Semantic Scholar 导入。</p>
-                )}
-              </div>
-            </section>
-
-            <section className="card section-card">
-              <h2>推荐引用</h2>
-              <form className="form-grid" onSubmit={generateRecommendations}>
-                <label>
-                  补充检索说明（可选）
-                  <textarea
-                    rows={4}
-                    value={recommendationExtra}
-                    onChange={(event) => setRecommendationExtra(event.target.value)}
-                    placeholder="例如：我现在重点想补 related work 里关于 long-context reasoning 和 scientific retrieval 的引用。"
-                  />
-                </label>
-                <button type="submit">生成候选引用</button>
-              </form>
-
-              {recommendations ? (
-                <div className="recommendation-panel">
-                  <div className="aspect-row">
-                    {recommendations.aspects.map((aspect) => (
-                      <div className="aspect-chip" key={aspect.label}>
-                        <strong>{aspect.label}</strong>
-                        <span>{aspect.keywords.join(', ')}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="list-stack">
-                    {recommendations.recommendations.map((item) => (
-                      <div className="list-card vertical" key={item.paper.id}>
-                        <div>
-                          <strong>{item.paper.title}</strong>
-                          <p className="muted">
-                            {item.paper.ownerName ? `来自 ${item.paper.ownerName} · ` : ''}
-                            {item.paper.authors.join(', ') || 'Unknown authors'}
-                            {item.paper.year ? ` · ${item.paper.year}` : ''}
-                            {item.paper.venue ? ` · ${item.paper.venue}` : ''}
-                          </p>
-                          <div className="tag-row">
-                            {item.matchedAspects.map((aspect) => (
-                              <span className="tag" key={aspect}>
-                                {aspect}
-                              </span>
-                            ))}
+                    <div className="list-stack">
+                      {recommendations.recommendations.map((item) => (
+                        <div className="list-card vertical" key={item.paper.id}>
+                          <div>
+                            <strong>{item.paper.title}</strong>
+                            <p className="muted">
+                              {item.paper.ownerName ? `来自 ${item.paper.ownerName} · ` : ''}
+                              {item.paper.authors.join(', ') || 'Unknown authors'}
+                              {item.paper.year ? ` · ${item.paper.year}` : ''}
+                              {item.paper.venue ? ` · ${item.paper.venue}` : ''}
+                            </p>
+                            <div className="tag-row">
+                              {item.matchedAspects.map((aspect) => (
+                                <span className="tag" key={aspect}>
+                                  {aspect}
+                                </span>
+                              ))}
+                            </div>
+                            {item.paper.tldr ? <p>{item.paper.tldr}</p> : null}
+                            <p className="muted">{item.reason}</p>
                           </div>
-                          {item.paper.tldr ? <p>{item.paper.tldr}</p> : null}
-                          <p className="muted">{item.reason}</p>
+                          <div className="button-row">
+                            <button type="button" className="secondary" onClick={() => void copyText(item.paper.bibtex)}>
+                              复制 BibTeX
+                            </button>
+                            {item.paper.externalUrl ? (
+                              <a className="link-button" href={item.paper.externalUrl} target="_blank" rel="noreferrer">
+                                查看来源
+                              </a>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="button-row">
-                          <button type="button" className="secondary" onClick={() => void copyText(item.paper.bibtex)}>
-                            复制 BibTeX
-                          </button>
-                          {item.paper.externalUrl ? (
-                            <a className="link-button" href={item.paper.externalUrl} target="_blank" rel="noreferrer">
-                              查看来源
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <p className="muted">
-                  系统会先分析你的研究方面，再从其他用户上传的论文中给出前 20 个候选引用。
-                </p>
-              )}
-            </section>
+                ) : (
+                  <p className="muted">系统会根据你的研究资料，从其他用户上传的论文中挑选候选引用。</p>
+                )}
+              </section>
+            ) : null}
           </>
         )}
       </main>
@@ -924,6 +827,17 @@ function Metric(props: { label: string; value: string }) {
       <strong>{props.value}</strong>
     </div>
   )
+}
+
+function readDashboardPage(): DashboardPage {
+  if (typeof window === 'undefined') {
+    return 'profile'
+  }
+  const page = window.location.hash.replace(/^#/, '')
+  if (page === 'profile' || page === 'papers' || page === 'invites' || page === 'recommendations') {
+    return page
+  }
+  return 'profile'
 }
 
 async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {

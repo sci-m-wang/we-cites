@@ -983,21 +983,20 @@ async function upsertPaper(
     abstract?: string
     introduction?: string
     tldr?: string
-    authors?: string[]
-    year?: number | null
-    venue?: string
-    source?: 'manual' | 'dblp' | 'semantic-scholar'
-    sourceId?: string | null
-    externalUrl?: string | null
   }>(c)
 
-  const title = body.title?.trim() ?? ''
   const bibtex = body.bibtex?.trim() ?? ''
-  if (!title || !bibtex) {
-    throw new HTTPException(400, { message: 'title 和 bibtex 必填' })
+  if (!bibtex) {
+    throw new HTTPException(400, { message: 'bibtex 必填' })
   }
 
-  const authors = arrayify(body.authors).map((author) => String(author).trim()).filter(Boolean)
+  const parsedBibtex = parseBibtexMetadata(bibtex)
+  const title = body.title?.trim() || parsedBibtex.title
+  if (!title) {
+    throw new HTTPException(400, { message: 'title 必填，或在 bibtex 中提供 title 字段' })
+  }
+
+  const authors = parsedBibtex.authors
   const paperRow: PaperRow = {
     id: paperId ?? crypto.randomUUID(),
     owner_user_id: ownerUserId,
@@ -1007,11 +1006,11 @@ async function upsertPaper(
     introduction: body.introduction?.trim() ?? '',
     tldr: body.tldr?.trim() ?? '',
     authors: JSON.stringify(authors),
-    year: body.year ? Number(body.year) : null,
-    venue: body.venue?.trim() ?? '',
-    source: body.source ?? 'manual',
-    source_id: body.sourceId?.trim() || null,
-    external_url: body.externalUrl?.trim() || null,
+    year: parsedBibtex.year,
+    venue: parsedBibtex.venue,
+    source: 'manual',
+    source_id: null,
+    external_url: parsedBibtex.url,
     search_text: '',
     embedding_json: null,
     created_at: nowIso(),
@@ -1400,6 +1399,167 @@ function parseStringArray(value: string) {
   } catch {
     return []
   }
+}
+
+function parseBibtexMetadata(bibtex: string) {
+  const fields = parseBibtexFields(bibtex)
+  const title = pickBibtexField(fields, ['title'])
+  const authors = parseBibtexAuthors(pickBibtexField(fields, ['author']))
+  const venue = pickBibtexField(fields, [
+    'journal',
+    'booktitle',
+    'series',
+    'publisher',
+    'school',
+    'institution',
+    'organization',
+    'howpublished',
+  ])
+  const url = pickBibtexField(fields, ['url', 'ee']) || null
+  const yearMatch = pickBibtexField(fields, ['year']).match(/\d{4}/)
+
+  return {
+    title,
+    authors,
+    venue,
+    url,
+    year: yearMatch ? Number(yearMatch[0]) : null,
+  }
+}
+
+function parseBibtexFields(bibtex: string) {
+  const fields: Record<string, string> = {}
+  const headerEnd = bibtex.indexOf(',')
+  if (headerEnd === -1) {
+    return fields
+  }
+
+  let index = headerEnd + 1
+  while (index < bibtex.length) {
+    while (index < bibtex.length && /[\s,]/.test(bibtex[index])) {
+      index += 1
+    }
+    if (index >= bibtex.length || bibtex[index] === '}') {
+      break
+    }
+
+    const keyStart = index
+    while (index < bibtex.length && /[A-Za-z0-9_-]/.test(bibtex[index])) {
+      index += 1
+    }
+    const key = bibtex.slice(keyStart, index).toLowerCase()
+
+    while (index < bibtex.length && /\s/.test(bibtex[index])) {
+      index += 1
+    }
+    if (bibtex[index] !== '=') {
+      while (index < bibtex.length && bibtex[index] !== ',') {
+        index += 1
+      }
+      continue
+    }
+
+    index += 1
+    while (index < bibtex.length && /\s/.test(bibtex[index])) {
+      index += 1
+    }
+
+    let value = ''
+    if (bibtex[index] === '{') {
+      const [nextIndex, parsed] = readBraceValue(bibtex, index)
+      index = nextIndex
+      value = parsed
+    } else if (bibtex[index] === '"') {
+      const [nextIndex, parsed] = readQuotedValue(bibtex, index)
+      index = nextIndex
+      value = parsed
+    } else {
+      const valueStart = index
+      while (index < bibtex.length && bibtex[index] !== ',' && bibtex[index] !== '}') {
+        index += 1
+      }
+      value = bibtex.slice(valueStart, index)
+    }
+
+    if (key) {
+      fields[key] = normalizeBibtexValue(value)
+    }
+  }
+
+  return fields
+}
+
+function readBraceValue(input: string, startIndex: number): [number, string] {
+  let depth = 0
+  let index = startIndex
+  let value = ''
+
+  while (index < input.length) {
+    const char = input[index]
+    if (char === '{') {
+      depth += 1
+      if (depth > 1) {
+        value += char
+      }
+      index += 1
+      continue
+    }
+    if (char === '}') {
+      depth -= 1
+      index += 1
+      if (depth === 0) {
+        break
+      }
+      value += char
+      continue
+    }
+
+    value += char
+    index += 1
+  }
+
+  return [index, value]
+}
+
+function readQuotedValue(input: string, startIndex: number): [number, string] {
+  let index = startIndex + 1
+  let value = ''
+
+  while (index < input.length) {
+    const char = input[index]
+    if (char === '"' && input[index - 1] !== '\\') {
+      index += 1
+      break
+    }
+
+    value += char
+    index += 1
+  }
+
+  return [index, value]
+}
+
+function normalizeBibtexValue(value: string) {
+  return value.replace(/\s+/g, ' ').replace(/[{}]/g, '').trim()
+}
+
+function pickBibtexField(fields: Record<string, string>, keys: string[]) {
+  for (const key of keys) {
+    if (fields[key]) {
+      return fields[key]
+    }
+  }
+  return ''
+}
+
+function parseBibtexAuthors(authorField: string) {
+  if (!authorField) {
+    return []
+  }
+  return authorField
+    .split(/\s+and\s+/i)
+    .map((author) => author.trim())
+    .filter(Boolean)
 }
 
 function buildGeneratedBibtex(input: {

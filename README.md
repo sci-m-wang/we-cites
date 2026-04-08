@@ -11,7 +11,7 @@
 - GitHub / Google OAuth 可选接入
 - 首个管理员通过 `BOOTSTRAP_ADMIN_EMAILS` 放行，默认应配置 `sci.m.wang@gmail.com`
 - 论文手动上传和编辑
-- DBLP / Semantic Scholar 快速导入，再由用户手动补全
+- 作者、年份、venue、链接等元数据从 BibTeX 规则提取
 - 推荐引用：先抽取研究方面，再做相似度排序，返回前 20 条候选并标注命中的方面
 - 一键复制 BibTeX
 
@@ -136,8 +136,7 @@ Semantic Scholar：
 ## 当前边界
 
 - 没有做邮件发送，邀请码是由老用户生成后手动发给新用户
-- 没有接 Google Scholar 和 Zotero 原生授权导入
-  - 这两个可以后续再补，但都比 DBLP / Semantic Scholar 更麻烦
+- 暂未启用 DBLP / Semantic Scholar / Google Scholar / Zotero 导入
 - 暂时没有全文上传与全文索引，只做元数据级别推荐
 
 ## 建议的下一步
