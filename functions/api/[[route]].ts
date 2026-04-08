@@ -113,7 +113,7 @@ const PASSWORD_ITERATIONS = 15000
 const PASSWORD_MIN_LENGTH = 8
 const AI_EMBEDDING_DIMENSIONS = 768
 const HASH_EMBEDDING_DIMENSIONS = 128
-const DEFAULT_BOOTSTRAP_ADMIN_EMAILS = ['sci.m.wang@gmail.com', 'bootstrap-test@example.com']
+const DEFAULT_BOOTSTRAP_ADMIN_EMAILS = ['sci.m.wang@gmail.com']
 
 const app = new Hono<AppContext>().basePath('/api')
 
