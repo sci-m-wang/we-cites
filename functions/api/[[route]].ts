@@ -48,6 +48,15 @@ type UserRow = {
   created_at: string
 }
 
+type LocalCredentialRow = {
+  user_id: string
+  password_hash: string
+  salt: string
+  iterations: number
+  created_at: string
+  updated_at: string
+}
+
 type InviteRow = {
   id: string
   code: string
@@ -100,6 +109,8 @@ type OAuthProfile = {
 const SESSION_COOKIE = 'wecites_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
 const OAUTH_COOKIE_MAX_AGE = 60 * 10
+const PASSWORD_ITERATIONS = 120000
+const PASSWORD_MIN_LENGTH = 8
 const AI_EMBEDDING_DIMENSIONS = 768
 const HASH_EMBEDDING_DIMENSIONS = 128
 
@@ -133,6 +144,103 @@ app.get('/session', async (c) => {
     stats,
   }
   return c.json(payload)
+})
+
+app.post('/auth/register', async (c) => {
+  const body = await safeJson<{
+    email?: string
+    password?: string
+    name?: string
+    inviteCode?: string
+  }>(c)
+  const email = requireEmail(body.email)
+  const password = requirePassword(body.password)
+  const normalizedEmail = normalizeEmail(email)
+  const existingUser = await first<UserRow>(
+    c.env.DB,
+    `SELECT * FROM users WHERE normalized_email = ?`,
+    normalizedEmail,
+  )
+  if (existingUser) {
+    const existingCredential = await first<LocalCredentialRow>(
+      c.env.DB,
+      `SELECT * FROM local_credentials WHERE user_id = ?`,
+      existingUser.id,
+    )
+    if (existingCredential) {
+      throw new HTTPException(409, { message: '邮箱已注册，请直接登录' })
+    }
+    throw new HTTPException(409, { message: '该邮箱已存在，请使用已有登录方式' })
+  }
+
+  const inviteCode = body.inviteCode?.trim() ? normalizeInviteCode(body.inviteCode) : null
+  const admission = await admitNewUser(c, email, inviteCode)
+  const userId = crypto.randomUUID()
+  const salt = randomToken(16)
+  const passwordHash = await hashPassword(password, salt, PASSWORD_ITERATIONS)
+  const displayName = body.name?.trim() || defaultNameForEmail(email)
+
+  await run(
+    c.env.DB,
+    `INSERT INTO users (
+      id, email, normalized_email, name, avatar_url, role,
+      research_summary, bio, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, NULL, ?, '', '', ?, ?)`,
+    userId,
+    email,
+    normalizedEmail,
+    displayName,
+    admission.role,
+    nowIso(),
+    nowIso(),
+  )
+  await run(
+    c.env.DB,
+    `INSERT INTO local_credentials (
+      user_id, password_hash, salt, iterations, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)`,
+    userId,
+    passwordHash,
+    salt,
+    PASSWORD_ITERATIONS,
+    nowIso(),
+    nowIso(),
+  )
+  if (admission.invite) {
+    await consumeInvite(c.env.DB, admission.invite, userId)
+  }
+
+  const session = await createSession(c.env.DB, userId)
+  await setSessionCookie(c, session.rawToken)
+  return c.json({ ok: true }, 201)
+})
+
+app.post('/auth/login', async (c) => {
+  const body = await safeJson<{ email?: string; password?: string }>(c)
+  const email = requireEmail(body.email)
+  const password = requirePassword(body.password)
+  const account = await first<UserRow & LocalCredentialRow>(
+    c.env.DB,
+    `SELECT users.*, local_credentials.user_id, local_credentials.password_hash,
+      local_credentials.salt, local_credentials.iterations
+      FROM users
+      JOIN local_credentials ON local_credentials.user_id = users.id
+      WHERE users.normalized_email = ?`,
+    normalizeEmail(email),
+  )
+
+  if (!account) {
+    throw new HTTPException(401, { message: '邮箱或密码错误' })
+  }
+
+  const isValid = await verifyPassword(password, account.salt, account.iterations, account.password_hash)
+  if (!isValid) {
+    throw new HTTPException(401, { message: '邮箱或密码错误' })
+  }
+
+  const session = await createSession(c.env.DB, account.id)
+  await setSessionCookie(c, session.rawToken)
+  return c.json({ ok: true })
 })
 
 app.post('/auth/start/:provider', async (c) => {
@@ -473,6 +581,26 @@ function requireProvider(value: string): OAuthProvider {
   throw new HTTPException(404, { message: '不支持的登录方式' })
 }
 
+function requireEmail(email: string | undefined) {
+  const value = email?.trim() ?? ''
+  if (!value || !EMAIL_PATTERN.test(value)) {
+    throw new HTTPException(400, { message: '请输入有效邮箱' })
+  }
+  return value
+}
+
+function requirePassword(password: string | undefined) {
+  const value = password ?? ''
+  if (value.length < PASSWORD_MIN_LENGTH) {
+    throw new HTTPException(400, { message: `密码至少 ${PASSWORD_MIN_LENGTH} 位` })
+  }
+  return value
+}
+
+function defaultNameForEmail(email: string) {
+  return email.split('@')[0] || 'Researcher'
+}
+
 async function buildAuthorizationUrl(
   c: Context<AppContext>,
   provider: OAuthProvider,
@@ -666,6 +794,33 @@ async function createSession(db: D1Database, userId: string) {
     nowIso(),
   )
   return { rawToken }
+}
+
+async function hashPassword(password: string, saltHex: string, iterations: number) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
+    'deriveBits',
+  ])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: hexToBytes(saltHex),
+      iterations,
+    },
+    key,
+    256,
+  )
+  return bytesToHex(new Uint8Array(bits))
+}
+
+async function verifyPassword(
+  password: string,
+  saltHex: string,
+  iterations: number,
+  expectedHash: string,
+) {
+  const computedHash = await hashPassword(password, saltHex, iterations)
+  return timingSafeEqual(computedHash, expectedHash)
 }
 
 async function getCurrentUser(c: Context<AppContext>) {
@@ -1400,6 +1555,25 @@ function bytesToHex(bytes: Uint8Array) {
     .join('')
 }
 
+function hexToBytes(value: string) {
+  const bytes = new Uint8Array(value.length / 2)
+  for (let index = 0; index < value.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16)
+  }
+  return bytes
+}
+
+function timingSafeEqual(left: string, right: string) {
+  if (left.length !== right.length) {
+    return false
+  }
+  let mismatch = 0
+  for (let index = 0; index < left.length; index += 1) {
+    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  }
+  return mismatch === 0
+}
+
 function toBase64Url(bytes: Uint8Array) {
   const base64 = btoa(String.fromCharCode(...bytes))
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
@@ -1478,3 +1652,5 @@ const STOPWORDS = new Set([
   '以及',
   '问题',
 ])
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type {
   ApiError,
-  AuthProvider,
   ImportResult,
   InviteRecord,
   PaperRecord,
@@ -37,6 +36,18 @@ type InviteForm = {
   expiresInDays: string
 }
 
+type LoginForm = {
+  email: string
+  password: string
+}
+
+type RegisterForm = {
+  name: string
+  email: string
+  password: string
+  inviteCode: string
+}
+
 const emptyPaperForm: PaperForm = {
   title: '',
   bibtex: '',
@@ -58,6 +69,18 @@ const emptyInviteForm: InviteForm = {
   expiresInDays: '14',
 }
 
+const emptyLoginForm: LoginForm = {
+  email: '',
+  password: '',
+}
+
+const emptyRegisterForm: RegisterForm = {
+  name: '',
+  email: '',
+  password: '',
+  inviteCode: '',
+}
+
 function App() {
   const [session, setSession] = useState<SessionPayload>({
     user: null,
@@ -73,8 +96,9 @@ function App() {
   })
   const [paperForm, setPaperForm] = useState<PaperForm>(emptyPaperForm)
   const [inviteForm, setInviteForm] = useState<InviteForm>(emptyInviteForm)
+  const [loginForm, setLoginForm] = useState<LoginForm>(emptyLoginForm)
+  const [registerForm, setRegisterForm] = useState<RegisterForm>(emptyRegisterForm)
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null)
-  const [authInviteCode, setAuthInviteCode] = useState('')
   const [importSource, setImportSource] = useState<'dblp' | 'semantic-scholar'>('dblp')
   const [importQuery, setImportQuery] = useState('')
   const [importResults, setImportResults] = useState<ImportResult[]>([])
@@ -95,22 +119,6 @@ function App() {
   }, [])
 
   const isAuthenticated = Boolean(session.user)
-
-  const providerButtons = useMemo(
-    () => [
-      {
-        provider: 'github' as const,
-        label: 'GitHub 登录',
-        enabled: session.features.githubAuth,
-      },
-      {
-        provider: 'google' as const,
-        label: 'Google 登录',
-        enabled: session.features.googleAuth,
-      },
-    ],
-    [session.features.githubAuth, session.features.googleAuth],
-  )
 
   async function refreshSession() {
     setLoadingLabel('正在加载会话')
@@ -140,14 +148,34 @@ function App() {
     }
   }
 
-  async function startAuth(provider: AuthProvider) {
-    setLoadingLabel(`正在跳转 ${provider}`)
+  async function loginWithEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoadingLabel('正在登录')
     try {
-      const response = await api<{ url: string }>(`/api/auth/start/${provider}`, {
+      await api('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ inviteCode: authInviteCode.trim() }),
+        body: JSON.stringify(loginForm),
       })
-      window.location.href = response.url
+      setLoginForm(emptyLoginForm)
+      await refreshSession()
+      setNotice('登录成功')
+    } catch (error) {
+      setLoadingLabel(null)
+      setNotice(readError(error))
+    }
+  }
+
+  async function registerWithEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoadingLabel('正在创建账号')
+    try {
+      await api('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registerForm),
+      })
+      setRegisterForm(emptyRegisterForm)
+      await refreshSession()
+      setNotice('账号已创建并登录')
     } catch (error) {
       setLoadingLabel(null)
       setNotice(readError(error))
@@ -352,10 +380,9 @@ function App() {
         <section className="hero card">
           <div>
             <p className="eyebrow">We Cites</p>
-            <h1>邀请制研究者引用发现站</h1>
+            <h1>为研究者建立私有引用网络</h1>
             <p className="lead">
-              用户填写自己的研究工作与简介后，系统先抽取研究方面，再从站内论文库中给出可直接复制
-              BibTeX 的前 20 个候选引用。
+              在小范围邀请网络中维护研究简介、论文条目与候选参考文献。
             </p>
           </div>
           <div className="hero-stats">
@@ -371,45 +398,89 @@ function App() {
         {!isAuthenticated ? (
           <section className="auth-grid">
             <article className="card auth-card">
-              <h2>邀请制注册 / 登录</h2>
-              <p>
-                新用户先输入邀请码，再走 GitHub 或 Google OAuth。老用户直接点对应登录按钮即可。
-              </p>
-              <label>
-                邀请码
-                <input
-                  value={authInviteCode}
-                  onChange={(event) => setAuthInviteCode(event.target.value)}
-                  placeholder="例如 INV-4F7D2A91"
-                />
-              </label>
-              <div className="button-row">
-                {providerButtons.map((item) => (
-                  <button
-                    key={item.provider}
-                    type="button"
-                    disabled={!item.enabled}
-                    onClick={() => void startAuth(item.provider)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-              <p className="muted">
-                首个管理员通过环境变量 `BOOTSTRAP_ADMIN_EMAILS` 放行。当前仓库默认预期邮箱是
-                `sci.m.wang@gmail.com`。
-              </p>
+              <h2>邮箱登录</h2>
+              <form className="form-grid compact" onSubmit={loginWithEmail}>
+                <label>
+                  邮箱
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    value={loginForm.email}
+                    onChange={(event) =>
+                      setLoginForm((current) => ({ ...current, email: event.target.value }))
+                    }
+                    placeholder="you@example.com"
+                  />
+                </label>
+                <label>
+                  密码
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={loginForm.password}
+                    onChange={(event) =>
+                      setLoginForm((current) => ({ ...current, password: event.target.value }))
+                    }
+                    placeholder="至少 8 位"
+                  />
+                </label>
+                <button type="submit">登录</button>
+              </form>
             </article>
 
             <article className="card auth-card">
-              <h2>当前能力</h2>
-              <ul className="plain-list">
-                <li>邀请制注册，老用户可生成新邀请码</li>
-                <li>GitHub / Google OAuth，且仍受邀请码约束</li>
-                <li>论文手动录入：title、bibtex、摘要、TLDR、介绍</li>
-                <li>DBLP / Semantic Scholar 快速导入后再手动补全</li>
-                <li>推荐结果标注命中的研究方面，并可直接复制 BibTeX</li>
-              </ul>
+              <h2>邮箱注册</h2>
+              <form className="form-grid compact" onSubmit={registerWithEmail}>
+                <label>
+                  显示名称
+                  <input
+                    autoComplete="name"
+                    value={registerForm.name}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="例如 Ming Wang"
+                  />
+                </label>
+                <label>
+                  邮箱
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    value={registerForm.email}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({ ...current, email: event.target.value }))
+                    }
+                    placeholder="you@example.com"
+                  />
+                </label>
+                <label>
+                  密码
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={registerForm.password}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({ ...current, password: event.target.value }))
+                    }
+                    placeholder="至少 8 位"
+                  />
+                </label>
+                <label>
+                  邀请码
+                  <input
+                    value={registerForm.inviteCode}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({ ...current, inviteCode: event.target.value }))
+                    }
+                    placeholder="普通成员注册需要填写"
+                  />
+                </label>
+                <button type="submit">创建账号</button>
+              </form>
+              <p className="muted">
+                初始管理员白名单邮箱可直接注册；其他新用户需要邀请码。
+              </p>
             </article>
           </section>
         ) : (

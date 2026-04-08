@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
   UNIQUE(provider, provider_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS local_credentials (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  password_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  iterations INTEGER NOT NULL DEFAULT 120000,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

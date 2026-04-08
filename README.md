@@ -6,8 +6,9 @@
 
 ## 已实现
 
-- 邀请制注册
-- GitHub / Google OAuth 登录，并且新用户仍然必须通过邀请码或管理员邮箱白名单进入
+- 邀请制邮箱注册 / 登录
+- 首个管理员邮箱可直接注册，其他新用户仍然必须通过邀请码进入
+- GitHub / Google OAuth 可选接入
 - 首个管理员通过 `BOOTSTRAP_ADMIN_EMAILS` 放行，默认应配置 `sci.m.wang@gmail.com`
 - 论文手动上传和编辑
 - DBLP / Semantic Scholar 快速导入，再由用户手动补全
@@ -96,7 +97,7 @@ npx wrangler d1 execute <YOUR_DB_NAME> --file=database/schema.sql
 - `BOOTSTRAP_ADMIN_EMAILS`
   - 至少包含：`sci.m.wang@gmail.com`
 
-GitHub OAuth：
+可选 OAuth：
 
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
@@ -111,7 +112,7 @@ Semantic Scholar：
 - `SEMANTIC_SCHOLAR_API_KEY`
   - 可选。不填也能跑，但会受更严格的公共频率限制。
 
-### 5. OAuth 回调地址
+### 5. OAuth 回调地址（仅在启用 OAuth 时需要）
 
 假设你的站点域名是 `https://we-cites.pages.dev`，则：
 
