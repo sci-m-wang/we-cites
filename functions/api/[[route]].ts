@@ -113,6 +113,7 @@ const PASSWORD_ITERATIONS = 120000
 const PASSWORD_MIN_LENGTH = 8
 const AI_EMBEDDING_DIMENSIONS = 768
 const HASH_EMBEDDING_DIMENSIONS = 128
+const DEFAULT_BOOTSTRAP_ADMIN_EMAIL = 'sci.m.wang@gmail.com'
 
 const app = new Hono<AppContext>().basePath('/api')
 
@@ -726,16 +727,13 @@ async function admitNewUser(
   inviteCode: string | null,
 ): Promise<{ role: 'owner' | 'member'; invite: InviteRow | null }> {
   const normalizedEmail = normalizeEmail(email)
-  const bootstrapEmails = (c.env.BOOTSTRAP_ADMIN_EMAILS ?? '')
-    .split(',')
-    .map((value) => normalizeEmail(value))
-    .filter(Boolean)
+  const bootstrapEmails = getBootstrapAdminEmails(c.env)
   if (bootstrapEmails.includes(normalizedEmail)) {
     return { role: 'owner', invite: null }
   }
 
   if (!inviteCode) {
-    throw new Error('新用户需要邀请码')
+    throw new HTTPException(403, { message: '新用户需要邀请码' })
   }
 
   const invite = await first<InviteRow>(
@@ -747,19 +745,29 @@ async function admitNewUser(
   )
 
   if (!invite) {
-    throw new Error('邀请码不存在')
+    throw new HTTPException(404, { message: '邀请码不存在' })
   }
   if (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now()) {
-    throw new Error('邀请码已过期')
+    throw new HTTPException(410, { message: '邀请码已过期' })
   }
   if (invite.used_count >= invite.max_uses) {
-    throw new Error('邀请码已使用完')
+    throw new HTTPException(409, { message: '邀请码已使用完' })
   }
   if (invite.normalized_target_email && invite.normalized_target_email !== normalizedEmail) {
-    throw new Error('该邀请码仅限指定邮箱使用')
+    throw new HTTPException(403, { message: '该邀请码仅限指定邮箱使用' })
   }
 
   return { role: 'member', invite }
+}
+
+function getBootstrapAdminEmails(env: Bindings) {
+  return Array.from(
+    new Set(
+      [DEFAULT_BOOTSTRAP_ADMIN_EMAIL, ...(env.BOOTSTRAP_ADMIN_EMAILS ?? '').split(',')]
+        .map((value) => normalizeEmail(value))
+        .filter(Boolean),
+    ),
+  )
 }
 
 async function consumeInvite(db: D1Database, invite: InviteRow, userId: string) {
