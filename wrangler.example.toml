@@ -1,0 +1,24 @@
+"$schema" = "./node_modules/wrangler/config-schema.json"
+
+name = "we-cites"
+pages_build_output_dir = "./dist"
+compatibility_date = "2026-04-08"
+
+# Example only.
+# Keep using Cloudflare Pages dashboard bindings if you prefer Git-based deploys.
+# Rename to wrangler.toml only after replacing placeholder values.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "replace-me"
+database_id = "replace-me"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "replace-me"
+
+[vars]
+BOOTSTRAP_ADMIN_EMAILS = "sci.m.wang@gmail.com"
