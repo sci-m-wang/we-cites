@@ -61,6 +61,12 @@ button:disabled {
 
 button.secondary,
 .link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.82rem 1rem;
+  border-radius: 14px;
   background: #111a2f;
   border: 1px solid #25314e;
   color: #dbe6ff;
